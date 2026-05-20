@@ -1,0 +1,9 @@
+menu "Keyboard Firmware"
+
+    config KEYBOARD_BLE_HID
+        bool "Enable BLE HID keyboard"
+        depends on BT_NIMBLE_ENABLED
+        select BT_NIMBLE_HID_SERVICE
+        default y
+
+endmenu

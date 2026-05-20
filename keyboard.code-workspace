@@ -1,0 +1,20 @@
+{
+    "folders": [
+        {
+            "path": ".",
+            "name": "Firmware"
+        },
+        {
+            "path": ".vscode",
+            "name": "Settings"
+        }
+    ],
+    "settings": {
+        "window.title": "4 keys Keyboard",
+        "files.exclude": {
+            "**/.vscode": true,
+            "**/.git": true,
+            "**/.DS_Store": true
+        }
+    }
+}
