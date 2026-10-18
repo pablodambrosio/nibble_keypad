@@ -36,6 +36,29 @@ The firmware default pin configuration targets typical ESP32-C3 development boar
 
 ---
 
+## Configurable Key Mappings & Modifier Combos
+
+Every key can be independently configured with any combination of modifier keys (`Ctrl`, `Shift`, `Alt`, `GUI`) and a primary HID keycode. Key configurations are stored in **NVS flash** and persist across resets.
+
+### Examples:
+- **Simple letter**: `'h'` &rarr; `modifiers = KEY_MOD_NONE`, `keycode = 0x0B`
+- **Copy shortcut**: `'Ctrl + c'` &rarr; `modifiers = KEY_MOD_LCTRL`, `keycode = 0x06`
+- **Paste shortcut**: `'Ctrl + v'` &rarr; `modifiers = KEY_MOD_LCTRL`, `keycode = 0x19`
+- **Triple combo**: `'Ctrl + Shift + v'` &rarr; `modifiers = KEY_MOD_LCTRL | KEY_MOD_LSHIFT`, `keycode = 0x19`
+- **Pure modifier**: `'Shift'` &rarr; `modifiers = KEY_MOD_LSHIFT`, `keycode = 0x00`
+
+### Programmatic Key Mapping API:
+```c
+// Retrieve configuration for Key 1..4 (index 0..3)
+key_mapping_t mapping;
+keyboard_get_key_mapping(0, &mapping);
+
+// Remap Key 2 (index 1) to "Ctrl + Shift + V" and persist to NVS
+keyboard_set_key_mapping(1, KEY_MOD_LCTRL | KEY_MOD_LSHIFT, 0x19);
+```
+
+---
+
 ## Power Management Architecture
 
 The firmware implements two user-configurable power profiles:

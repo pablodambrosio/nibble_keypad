@@ -4,7 +4,8 @@
  *
  * Implements a Bluetooth Low Energy (BLE) Human Interface Device (HID) keyboard
  * using Apache NimBLE and ESP-IDF. Includes atomic 4-key debouncing, standard 8-byte
- * HID reports, "Just Works" pairing, and a 2-stage persistent power manager.
+ * HID reports, "Just Works" pairing, a 2-stage persistent power manager, and
+ * configurable/persistent key mappings with full modifier combo support (Ctrl, Shift, Alt, GUI).
  */
 
 #include <stdio.h>
@@ -33,7 +34,7 @@
 static const char *TAG = "keyboard";
 
 // ============================================================================
-// Hardware & Key Configuration
+// Hardware & Pin Configuration
 // ============================================================================
 #define NUM_KEYS 4
 #define DEBOUNCE_READS 5
@@ -48,7 +49,127 @@ static const char *TAG = "keyboard";
  */
 static const gpio_num_t key_pins[NUM_KEYS] = { GPIO_NUM_10, GPIO_NUM_8, GPIO_NUM_9, GPIO_NUM_20 };
 static const char *key_names[NUM_KEYS] = { "Key1", "Key2", "Key3", "Key4" };
-static const uint8_t key_hid_usages[NUM_KEYS] = { 0x04, 0x05, 0x06, 0x07 }; // 'a', 'b', 'c', 'd'
+
+// ============================================================================
+// Configurable Key Mappings & Combos (Stored Persistently in NVS)
+// ============================================================================
+
+/**
+ * @brief Standard USB HID Keyboard Modifier Bitmasks.
+ */
+#define KEY_MOD_NONE       0x00
+#define KEY_MOD_LCTRL      (1 << 0) // 0x01: Left Control
+#define KEY_MOD_LSHIFT     (1 << 1) // 0x02: Left Shift
+#define KEY_MOD_LALT       (1 << 2) // 0x04: Left Alt
+#define KEY_MOD_LMETA      (1 << 3) // 0x08: Left GUI / Windows / Command
+#define KEY_MOD_RCTRL      (1 << 4) // 0x10: Right Control
+#define KEY_MOD_RSHIFT     (1 << 5) // 0x20: Right Shift
+#define KEY_MOD_RALT       (1 << 6) // 0x40: Right Alt (AltGr)
+#define KEY_MOD_RMETA      (1 << 7) // 0x80: Right GUI
+
+/**
+ * @brief Key mapping structure supporting arbitrary modifier combos + keycodes.
+ *
+ * Examples:
+ * - Simple 'h':             { .modifiers = KEY_MOD_NONE, .keycode = 0x0B }
+ * - Combo 'Ctrl+Shift+v':   { .modifiers = KEY_MOD_LCTRL | KEY_MOD_LSHIFT, .keycode = 0x19 }
+ * - Copy 'Ctrl+c':          { .modifiers = KEY_MOD_LCTRL, .keycode = 0x06 }
+ * - Paste 'Ctrl+v':         { .modifiers = KEY_MOD_LCTRL, .keycode = 0x19 }
+ * - Pure modifier (Shift):  { .modifiers = KEY_MOD_LSHIFT, .keycode = 0x00 }
+ */
+typedef struct {
+    uint8_t modifiers; /**< Bitmask of modifier keys (KEY_MOD_*) */
+    uint8_t keycode;   /**< Primary HID usage code (0x04='a', 0x19='v', etc.) */
+} key_mapping_t;
+
+#define NVS_NAMESPACE_CFG "kb_cfg"
+#define NVS_KEY_KEY_MAP   "key_map"
+
+// Default key assignments: Key 1='a', Key 2='b', Key 3='c', Key 4='d'
+static const key_mapping_t s_default_key_mappings[NUM_KEYS] = {
+    { .modifiers = KEY_MOD_NONE, .keycode = 0x04 }, // Key 1: 'a'
+    { .modifiers = KEY_MOD_NONE, .keycode = 0x05 }, // Key 2: 'b'
+    { .modifiers = KEY_MOD_NONE, .keycode = 0x06 }, // Key 3: 'c'
+    { .modifiers = KEY_MOD_NONE, .keycode = 0x07 }, // Key 4: 'd'
+};
+
+static key_mapping_t s_key_mappings[NUM_KEYS];
+
+/**
+ * @brief Get the configuration of a specific key.
+ *
+ * @param index Key index (0 to NUM_KEYS - 1).
+ * @param[out] out_mapping Pointer to receive key mapping.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG on invalid index or NULL pointer.
+ */
+esp_err_t keyboard_get_key_mapping(size_t index, key_mapping_t *out_mapping)
+{
+    if (index >= NUM_KEYS || out_mapping == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_mapping = s_key_mappings[index];
+    return ESP_OK;
+}
+
+/**
+ * @brief Configure and persist in NVS flash a key combo for a specific key.
+ *
+ * @param index Key index (0 to NUM_KEYS - 1).
+ * @param modifiers Modifier bitmask (e.g. KEY_MOD_LCTRL | KEY_MOD_LSHIFT).
+ * @param keycode Primary HID usage code (e.g. 0x19 for 'v').
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG on invalid index.
+ */
+esp_err_t keyboard_set_key_mapping(size_t index, uint8_t modifiers, uint8_t keycode)
+{
+    if (index >= NUM_KEYS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_key_mappings[index].modifiers = modifiers;
+    s_key_mappings[index].keycode = keycode;
+
+    nvs_handle_t nvs_h;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_CFG, NVS_READWRITE, &nvs_h);
+    if (err == ESP_OK) {
+        nvs_set_blob(nvs_h, NVS_KEY_KEY_MAP, s_key_mappings, sizeof(s_key_mappings));
+        nvs_commit(nvs_h);
+        nvs_close(nvs_h);
+    }
+    ESP_LOGI(TAG, "Key %s updated: mod=0x%02X, code=0x%02X",
+             key_names[index], modifiers, keycode);
+    return ESP_OK;
+}
+
+/**
+ * @brief Load persistent key mappings from NVS flash, or save defaults on first boot.
+ */
+static void load_key_mappings(void)
+{
+    memcpy(s_key_mappings, s_default_key_mappings, sizeof(s_key_mappings));
+
+    nvs_handle_t nvs_h;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_CFG, NVS_READONLY, &nvs_h);
+    if (err == ESP_OK) {
+        size_t required_size = sizeof(s_key_mappings);
+        err = nvs_get_blob(nvs_h, NVS_KEY_KEY_MAP, s_key_mappings, &required_size);
+        if (err != ESP_OK || required_size != sizeof(s_key_mappings)) {
+            memcpy(s_key_mappings, s_default_key_mappings, sizeof(s_key_mappings));
+        }
+        nvs_close(nvs_h);
+    } else {
+        // First boot: save initial defaults to NVS
+        if (nvs_open(NVS_NAMESPACE_CFG, NVS_READWRITE, &nvs_h) == ESP_OK) {
+            nvs_set_blob(nvs_h, NVS_KEY_KEY_MAP, s_key_mappings, sizeof(s_key_mappings));
+            nvs_commit(nvs_h);
+            nvs_close(nvs_h);
+            ESP_LOGI(TAG, "Initialized default key mappings in NVS");
+        }
+    }
+
+    for (int i = 0; i < NUM_KEYS; ++i) {
+        ESP_LOGI(TAG, "Key %s mapping: mod=0x%02X, code=0x%02X",
+                 key_names[i], s_key_mappings[i].modifiers, s_key_mappings[i].keycode);
+    }
+}
 
 // ============================================================================
 // HID Report Configuration
@@ -94,8 +215,7 @@ static const power_profile_config_t g_power_profiles[] = {
     [POWER_PROFILE_ENERGY_SAVE] = { .idle_timeout_sec = 10, .sleep_timeout_sec = 300, .name = "ENERGY_SAVE (10s idle / 5m sleep)" },
 };
 
-#define NVS_NAMESPACE_CFG "kb_cfg"
-#define NVS_KEY_PWR_MODE  "pwr_mode"
+#define NVS_KEY_PWR_MODE "pwr_mode"
 
 static power_profile_mode_t s_power_mode = POWER_PROFILE_ENERGY_SAVE;
 static bool s_in_idle_conn_params = false;
@@ -404,17 +524,26 @@ static esp_err_t send_keyboard_report(void)
 /**
  * @brief Update the internal 8-byte HID report buffer from current key debounced state.
  *
+ * Populates Byte 0 with the OR-ed modifier mask and Bytes 2..7 with active keycodes.
+ * Supports simultaneous multi-key presses and full combos (e.g. Ctrl + Shift + V).
+ *
  * @param state Array of debounced binary levels for Keys 1..4 (0 = pressed, 1 = released).
  */
 static void update_keyboard_report_from_state(const int *state)
 {
     memset(s_key_report, 0, sizeof(s_key_report));
+    uint8_t modifiers = 0;
     int idx = 2; // Keycode array starts at byte index 2
-    for (int i = 0; i < NUM_KEYS && idx < HID_KEYBOARD_REPORT_LEN; ++i) {
+
+    for (int i = 0; i < NUM_KEYS; ++i) {
         if (state[i] == 0) { // Active low: 0 indicates pressed
-            s_key_report[idx++] = key_hid_usages[i];
+            modifiers |= s_key_mappings[i].modifiers;
+            if (s_key_mappings[i].keycode != 0 && idx < HID_KEYBOARD_REPORT_LEN) {
+                s_key_report[idx++] = s_key_mappings[i].keycode;
+            }
         }
     }
+    s_key_report[0] = modifiers;
 }
 
 /**
@@ -448,8 +577,9 @@ void key_task(void *arg)
                     debounced_state[i] = level;
                     stable_count[i] = 0;
                     state_changed = true;
-                    ESP_LOGI(TAG, "Key %s %s (GPIO %d)", key_names[i],
-                             level == 0 ? "pressed" : "released", key_pins[i]);
+                    ESP_LOGI(TAG, "Key %s %s (GPIO %d, mod=0x%02X, code=0x%02X)",
+                             key_names[i], level == 0 ? "pressed" : "released", key_pins[i],
+                             s_key_mappings[i].modifiers, s_key_mappings[i].keycode);
                 }
             } else {
                 stable_count[i] = 0;
@@ -557,7 +687,8 @@ static void init_ble_hid(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    // Load persistent power management profile from NVS
+    // Load persistent key mappings and power management profile from NVS
+    load_key_mappings();
     load_power_profile();
 
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));

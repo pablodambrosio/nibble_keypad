@@ -156,21 +156,30 @@ stateDiagram-v2
 
 ## 5. NVS Persistence Schema
 
-Power profiles are persisted in flash using the ESP-IDF Non-Volatile Storage (NVS) library:
+Settings are stored in the non-volatile storage partition using the ESP-IDF NVS API under the `"kb_cfg"` namespace:
 
-| Parameter | Type | Key Name | Namespace | Values |
+| Parameter | Type | Key Name | Namespace | Description / Values |
 |---|---|---|---|---|
-| Power Profile | `uint8_t` | `"pwr_mode"` | `"kb_cfg"` | `0` = NORMAL (30s / 10m)<br/>`1` = ENERGY_SAVE (10s / 5m) |
+| **Power Profile** | `uint8_t` | `"pwr_mode"` | `"kb_cfg"` | `0` = NORMAL (30s idle / 10m sleep)<br/>`1` = ENERGY_SAVE (10s idle / 5m sleep) |
+| **Key Mappings** | `blob` (8 bytes) | `"key_map"` | `"kb_cfg"` | Array of 4 `key_mapping_t` structs (2 bytes each: `modifiers` + `keycode`) |
+
+### Key Mapping Structure:
+```c
+typedef struct {
+    uint8_t modifiers; // Bitmask of KEY_MOD_* (Ctrl, Shift, Alt, GUI)
+    uint8_t keycode;   // Standard HID usage code (0x04='a', 0x19='v', etc.)
+} key_mapping_t;
+```
 
 ---
 
 ## 6. Future Extension: Custom Configuration GATT Service
 
-The firmware is designed to be easily extensible for wireless configuration from a mobile app or Web Bluetooth web page:
+The firmware is designed to be easily extensible for wireless remapping from a mobile app or Web Bluetooth web page:
 
 ### Proposed GATT Profile:
 - **Service UUID**: `0000FFF0-0000-1000-8000-00805F9B34FB` (Custom Configuration Service)
 - **Characteristics**:
   - `0xFFF1` (Read/Write, 1 byte): **Power Profile Selection** (`0x00` = Normal, `0x01` = Energy Save).
-  - `0xFFF2` (Read/Write, 4 bytes): **Key Remapping Table** (Maps Key 1..4 to arbitrary HID usage codes).
+  - `0xFFF2` (Read/Write, 8 bytes): **Key Remapping Table** (4 keys × 2 bytes: `[mod0, key0, mod1, key1, mod2, key2, mod3, key3]`).
   - `0xFFF3` (Read, 1 byte): **Battery Level** (Standard Battery Service UUID `0x180F`).
