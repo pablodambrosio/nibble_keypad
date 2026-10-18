@@ -28,6 +28,7 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "services/gap/ble_svc_gap.h"
+#include "services/bas/ble_svc_bas.h"
 #include "esp_sleep.h"
 #include "esp_timer.h"
 
@@ -496,7 +497,8 @@ static void hidd_event_callback(void *handler_args, esp_event_base_t base, int32
         s_ble_connected = true;
         s_report_pending = true;
         s_in_idle_conn_params = false;
-        ESP_LOGI(TAG, "HID host connected");
+        esp_hidd_dev_battery_set(s_hid_dev, 100);
+        ESP_LOGI(TAG, "HID host connected (battery reported as 100%%)");
         break;
     case ESP_HIDD_DISCONNECT_EVENT:
         s_ble_connected = false;
@@ -720,6 +722,9 @@ static void init_ble_hid(void)
      * when the host task establishes sync.
      */
     ESP_ERROR_CHECK(esp_hidd_dev_init(&hid_config, ESP_HID_TRANSPORT_BLE, hidd_event_callback, &s_hid_dev));
+
+    // Initialize battery level to 100% in GATT database (no physical battery monitor)
+    ble_svc_bas_battery_level_set(100);
 
     // Start the NimBLE host task
     host_task_start();
