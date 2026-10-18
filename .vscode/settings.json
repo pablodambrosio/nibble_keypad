@@ -16,5 +16,6 @@
     "--background-index",
     "--query-driver=**",
     "--compile-commands-dir=c:\\Projects\\esp32\\keyboard\\firmware\\build"
-  ]
+  ],
+  "idf.port": "COM12"
 }
