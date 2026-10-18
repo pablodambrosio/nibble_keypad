@@ -1,3 +1,12 @@
+/**
+ * @file main.c
+ * @brief Nimble 4 - ESP32-C3 4-Key BLE HID Keyboard Firmware
+ *
+ * Implements a Bluetooth Low Energy (BLE) Human Interface Device (HID) keyboard
+ * using Apache NimBLE and ESP-IDF. Includes atomic 4-key debouncing, standard 8-byte
+ * HID reports, "Just Works" pairing, and a 2-stage persistent power manager.
+ */
+
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
@@ -23,13 +32,15 @@
 
 static const char *TAG = "keyboard";
 
-// Key scanner config
+// ============================================================================
+// Hardware & Key Configuration
+// ============================================================================
 #define NUM_KEYS 4
 #define DEBOUNCE_READS 5
 #define SCAN_INTERVAL_MS 10
 
-/*
- * Note for ESP32-C3:
+/**
+ * @note ESP32-C3 Hardware Notice:
  * GPIO 9 is the chip's BOOT strapping pin. If Key 3 is held down while powering on
  * or resetting, the ESP32-C3 enters UART bootloader / download mode instead of booting SPI flash.
  * GPIO 8 also controls ROM boot log output.
@@ -39,7 +50,9 @@ static const gpio_num_t key_pins[NUM_KEYS] = { GPIO_NUM_10, GPIO_NUM_8, GPIO_NUM
 static const char *key_names[NUM_KEYS] = { "Key1", "Key2", "Key3", "Key4" };
 static const uint8_t key_hid_usages[NUM_KEYS] = { 0x04, 0x05, 0x06, 0x07 }; // 'a', 'b', 'c', 'd'
 
-// HID report
+// ============================================================================
+// HID Report Configuration
+// ============================================================================
 #define HID_KEYBOARD_REPORT_ID 1
 #define HID_KEYBOARD_REPORT_LEN 8
 
@@ -49,24 +62,31 @@ static volatile bool s_report_pending = false;
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static uint8_t s_key_report[HID_KEYBOARD_REPORT_LEN];
 
-// BLE settings
+// BLE Device Identity
 static const char *DEVICE_NAME = "Nimble 4";
 
-// Forward declare store config from NimBLE
+// Forward declaration from NimBLE store config
 void ble_store_config_init(void);
 
 // ============================================================================
 // Power Management Profiles (Configurable & Persistent in NVS)
 // ============================================================================
+
+/**
+ * @brief Available power profiles controlling idle and sleep timeout thresholds.
+ */
 typedef enum {
-    POWER_PROFILE_NORMAL = 0,       // Normal mode: 30s connected idle / 10 min sleep
-    POWER_PROFILE_ENERGY_SAVE = 1,   // Energy save mode: 10s connected idle / 5 min sleep
+    POWER_PROFILE_NORMAL = 0,       /**< Normal mode: 30s connected idle / 10 min sleep */
+    POWER_PROFILE_ENERGY_SAVE = 1,   /**< Energy save mode: 10s connected idle / 5 min sleep */
 } power_profile_mode_t;
 
+/**
+ * @brief Timing parameters for a power profile.
+ */
 typedef struct {
-    uint32_t idle_timeout_sec;   // Stage 1: Time until connected idle (slave latency enabled)
-    uint32_t sleep_timeout_sec;  // Stage 2: Time until radio disconnect and sleep
-    const char *name;
+    uint32_t idle_timeout_sec;   /**< Stage 1: Time until connected idle (slave latency enabled) */
+    uint32_t sleep_timeout_sec;  /**< Stage 2: Time until radio disconnect and light sleep */
+    const char *name;            /**< Human-readable profile name */
 } power_profile_config_t;
 
 static const power_profile_config_t g_power_profiles[] = {
@@ -80,11 +100,22 @@ static const power_profile_config_t g_power_profiles[] = {
 static power_profile_mode_t s_power_mode = POWER_PROFILE_ENERGY_SAVE;
 static bool s_in_idle_conn_params = false;
 
+/**
+ * @brief Retrieve the currently active power management profile.
+ *
+ * @return power_profile_mode_t Active profile enum (0 = NORMAL, 1 = ENERGY_SAVE).
+ */
 power_profile_mode_t power_manager_get_profile(void)
 {
     return s_power_mode;
 }
 
+/**
+ * @brief Set the active power management profile and commit it to NVS flash.
+ *
+ * @param mode Desired power profile.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if mode is out of range.
+ */
 esp_err_t power_manager_set_profile(power_profile_mode_t mode)
 {
     if (mode > POWER_PROFILE_ENERGY_SAVE) {
@@ -103,6 +134,9 @@ esp_err_t power_manager_set_profile(power_profile_mode_t mode)
     return ESP_OK;
 }
 
+/**
+ * @brief Load persistent power management profile from NVS storage.
+ */
 static void load_power_profile(void)
 {
     nvs_handle_t nvs_h;
@@ -119,6 +153,12 @@ static void load_power_profile(void)
     ESP_LOGI(TAG, "Active power profile: %s", g_power_profiles[s_power_mode].name);
 }
 
+/**
+ * @brief Dynamically request BLE connection parameter updates for Stage 1 low-power idle.
+ *
+ * @param idle If true, enables slave latency (30 connection intervals).
+ *             If false, restores low-latency parameters (latency = 0) for active typing.
+ */
 static void update_connection_power_mode(bool idle)
 {
     if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE || !s_ble_connected) {
@@ -148,7 +188,19 @@ static void update_connection_power_mode(bool idle)
     ble_gap_update_params(s_conn_handle, &params);
 }
 
-// HID keyboard report map (standard 8-byte input report + 1-byte LED output report)
+// ============================================================================
+// HID Report Map & Configuration
+// ============================================================================
+
+/**
+ * @brief Standard USB HID Keyboard Report Descriptor.
+ *
+ * Layout:
+ * - 1 byte Modifier keys (Ctrl, Shift, Alt, GUI)
+ * - 1 byte Reserved / OEM padding
+ * - 5 bits LED output indicators (NumLock, CapsLock, ScrollLock, Compose, Kana) + 3 bits padding
+ * - 6 bytes Key array (6-key rollover)
+ */
 static const uint8_t keyboard_report_map[] = {
     0x05, 0x01,                    // USAGE_PAGE (Generic Desktop)
     0x09, 0x06,                    // USAGE (Keyboard)
@@ -202,6 +254,9 @@ static esp_hid_device_config_t hid_config = {
 
 static int ble_gap_event(struct ble_gap_event *event, void *arg);
 
+/**
+ * @brief Configure advertising packet fields and start general discoverable BLE advertising.
+ */
 static void ble_start_advertising(void)
 {
     if (ble_gap_adv_active()) {
@@ -252,6 +307,9 @@ static void ble_start_advertising(void)
     }
 }
 
+/**
+ * @brief NimBLE Host task loop entry point.
+ */
 static void ble_host_task(void *param)
 {
     ESP_LOGI(TAG, "BLE host task started");
@@ -259,6 +317,9 @@ static void ble_host_task(void *param)
     nimble_port_freertos_deinit();
 }
 
+/**
+ * @brief NimBLE GAP event handler for connection, disconnection, and security requests.
+ */
 static int ble_gap_event(struct ble_gap_event *event, void *arg)
 {
     switch (event->type) {
@@ -298,6 +359,9 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
     }
 }
 
+/**
+ * @brief ESP HID Device callback invoked when HID events occur.
+ */
 static void hidd_event_callback(void *handler_args, esp_event_base_t base, int32_t id, void *event_data)
 {
     esp_hidd_event_t event = (esp_hidd_event_t)id;
@@ -326,6 +390,9 @@ static void hidd_event_callback(void *handler_args, esp_event_base_t base, int32
     }
 }
 
+/**
+ * @brief Transmit the current 8-byte key report to the connected host via GATT notification.
+ */
 static esp_err_t send_keyboard_report(void)
 {
     if (s_hid_dev == NULL || !s_ble_connected) {
@@ -334,6 +401,11 @@ static esp_err_t send_keyboard_report(void)
     return esp_hidd_dev_input_set(s_hid_dev, 0, HID_KEYBOARD_REPORT_ID, s_key_report, sizeof(s_key_report));
 }
 
+/**
+ * @brief Update the internal 8-byte HID report buffer from current key debounced state.
+ *
+ * @param state Array of debounced binary levels for Keys 1..4 (0 = pressed, 1 = released).
+ */
 static void update_keyboard_report_from_state(const int *state)
 {
     memset(s_key_report, 0, sizeof(s_key_report));
@@ -345,6 +417,14 @@ static void update_keyboard_report_from_state(const int *state)
     }
 }
 
+/**
+ * @brief Key scanning and power manager FreeRTOS task.
+ *
+ * Runs every 10 ms to:
+ * 1. Debounce GPIO inputs across 5 consecutive samples.
+ * 2. Transmit bundled HID reports when keys change.
+ * 3. Step through Stage 1 (Connected Idle) and Stage 2 (Sleep Mode) based on inactivity.
+ */
 void key_task(void *arg)
 {
     int debounced_state[NUM_KEYS];
@@ -435,6 +515,7 @@ void key_task(void *arg)
 
                 esp_light_sleep_start();
 
+                // Execution resumes here upon key press interrupt
                 ESP_LOGI(TAG, "Woke up from sleep! Resuming...");
                 last_activity_us = esp_timer_get_time();
                 s_in_idle_conn_params = false;
@@ -456,11 +537,17 @@ void key_task(void *arg)
     }
 }
 
+/**
+ * @brief Initialize FreeRTOS wrapper for NimBLE host task.
+ */
 static void host_task_start(void)
 {
     nimble_port_freertos_init(ble_host_task);
 }
 
+/**
+ * @brief Initialize Bluetooth controller, NimBLE stack, and HID service.
+ */
 static void init_ble_hid(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -503,12 +590,15 @@ static void init_ble_hid(void)
      */
     ESP_ERROR_CHECK(esp_hidd_dev_init(&hid_config, ESP_HID_TRANSPORT_BLE, hidd_event_callback, &s_hid_dev));
 
-    // Now start the NimBLE host task
+    // Start the NimBLE host task
     host_task_start();
 
     ESP_LOGI(TAG, "BLE HID initialized, waiting for sync");
 }
 
+/**
+ * @brief Application entry point.
+ */
 void app_main(void)
 {
     // Configure GPIOs as inputs with internal pull-up
