@@ -632,10 +632,10 @@ static const uint8_t keyboard_report_map[] = {
     0x95, 0x06,                    //   REPORT_COUNT (6)
     0x75, 0x08,                    //   REPORT_SIZE (8)
     0x15, 0x00,                    //   LOGICAL_MINIMUM (0)
-    0x25, 0x65,                    //   LOGICAL_MAXIMUM (101)
+    0x26, 0xFF, 0x00,              //   LOGICAL_MAXIMUM (255)
     0x05, 0x07,                    //   USAGE_PAGE (Keyboard)
     0x19, 0x00,                    //   USAGE_MINIMUM (Reserved)
-    0x29, 0x65,                    //   USAGE_MAXIMUM (Keyboard Application)
+    0x2A, 0xFF, 0x00,              //   USAGE_MAXIMUM (255)
     0x81, 0x00,                    //   INPUT (Data,Ary,Abs) -- 6-key rollover array
     0xC0                           // END_COLLECTION
 };

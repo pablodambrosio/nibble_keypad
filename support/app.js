@@ -118,10 +118,18 @@ const HID_KEYCODES = [
     { code: 0x51, name: 'Down Arrow', category: 'Navigation' },
     { code: 0x52, name: 'Up Arrow', category: 'Navigation' },
 
-    // Media & System
-    { code: 0x7F, name: 'Mute', category: 'Media' },
-    { code: 0x80, name: 'Volume Up', category: 'Media' },
-    { code: 0x81, name: 'Volume Down', category: 'Media' }
+    // Media & Playback Controls
+    { code: 0xF0, name: 'Play / Pause (⏯)', category: 'Media' },
+    { code: 0xED, name: 'Next Track (⏭)', category: 'Media' },
+    { code: 0xEE, name: 'Previous Track (⏮)', category: 'Media' },
+    { code: 0xEF, name: 'Stop (⏹)', category: 'Media' },
+    { code: 0x7F, name: 'Mute (🔇)', category: 'Media' },
+    { code: 0x80, name: 'Volume Up (🔊)', category: 'Media' },
+    { code: 0x81, name: 'Volume Down (🔉)', category: 'Media' },
+    { code: 0xEB, name: 'Fast Forward (⏩)', category: 'Media' },
+    { code: 0xEC, name: 'Rewind (⏪)', category: 'Media' },
+    { code: 0xE8, name: 'Play (▶)', category: 'Media' },
+    { code: 0xE9, name: 'Pause (⏸)', category: 'Media' }
 ];
 
 // Mapping from JS KeyboardEvent.code to USB HID Usage ID
@@ -140,7 +148,9 @@ const JS_CODE_TO_HID = {
     'F7': 0x40, 'F8': 0x41, 'F9': 0x42, 'F10': 0x43, 'F11': 0x44, 'F12': 0x45,
     'PrintScreen': 0x46, 'ScrollLock': 0x47, 'Pause': 0x48, 'Insert': 0x49, 'Home': 0x4A,
     'PageUp': 0x4B, 'Delete': 0x4C, 'End': 0x4D, 'PageDown': 0x4E,
-    'ArrowRight': 0x4F, 'ArrowLeft': 0x50, 'ArrowDown': 0x51, 'ArrowUp': 0x52
+    'ArrowRight': 0x4F, 'ArrowLeft': 0x50, 'ArrowDown': 0x51, 'ArrowUp': 0x52,
+    'MediaPlayPause': 0xF0, 'MediaTrackNext': 0xED, 'MediaTrackPrevious': 0xEE,
+    'MediaStop': 0xEF, 'AudioVolumeMute': 0x7F, 'AudioVolumeUp': 0x80, 'AudioVolumeDown': 0x81
 };
 
 // ============================================================================
@@ -688,14 +698,15 @@ function applyPreset(name) {
             break;
 
         case 'media':
-            // Key 1: Mute, Key 2: Volume Down, Key 3: Volume Up, Key 4: Play/Pause (Space)
+            // Key 1 (Top-Left): Previous Track, Key 2 (Top-Right): Next Track
+            // Key 3 (Bottom-Left): Play/Pause, Key 4 (Bottom-Right): Mute
             state.keys = [
-                { modifiers: 0x00, keycode: 0x7F }, // Mute
-                { modifiers: 0x00, keycode: 0x81 }, // Vol-
-                { modifiers: 0x00, keycode: 0x80 }, // Vol+
-                { modifiers: 0x00, keycode: 0x2C }  // Space / Play
+                { modifiers: 0x00, keycode: 0xEE }, // Previous Track
+                { modifiers: 0x00, keycode: 0xED }, // Next Track
+                { modifiers: 0x00, keycode: 0xF0 }, // Play / Pause
+                { modifiers: 0x00, keycode: 0x7F }  // Mute
             ];
-            log('Applied Media Controller Preset: [Mute, Vol-, Vol+, Space]', 'system');
+            log('Applied Media Controller Preset: [Prev, Next, Play/Pause, Mute]', 'system');
             break;
 
         case 'window':
