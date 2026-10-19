@@ -166,6 +166,7 @@ const state = {
         battery: null
     },
     connected: false,
+    transport: 'none', // 'bridge' | 'ble' | 'none'
     selectedKeyIndex: 0,
     keys: [
         { modifiers: 0x00, keycode: 0x04 }, // Key 1: 'a'
@@ -176,6 +177,10 @@ const state = {
     powerMode: 0, // 0 = Normal, 1 = Energy Save
     isCapturing: false
 };
+
+// WebSocket Bridge Connection
+let wsBridge = null;
+let wsConnected = false;
 
 // ============================================================================
 // DOM Element References
@@ -244,16 +249,157 @@ const elements = {
 // Initialization & Keycode Populator
 // ============================================================================
 function init() {
+    initWebSocketBridge();
+
     // Check Web Bluetooth API availability
     if (!navigator.bluetooth) {
-        elements.compatWarning.classList.remove('hidden');
-        log('Web Bluetooth is NOT supported by this browser. Use Google Chrome or Microsoft Edge.', 'error');
+        log('Web Bluetooth is NOT supported by this browser. (Using WebSocket Host Bridge if active).', 'info');
     }
 
     populateKeycodeSelect();
     bindEvents();
     renderAllKeycaps();
     loadSelectedKeyIntoEditor();
+}
+
+function initWebSocketBridge() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+    try {
+        wsBridge = new WebSocket(wsUrl);
+
+        wsBridge.onopen = () => {
+            wsConnected = true;
+            log('Connected to local Node.js WebSocket Host Bridge.', 'system');
+            updateBridgeUiState(false, 'Host Bridge connected. Press any key on Nibble Keypad to wake.');
+        };
+
+        wsBridge.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+                handleWsMessage(msg);
+            } catch (err) {
+                console.error('Error parsing WS message:', err);
+            }
+        };
+
+        wsBridge.onclose = () => {
+            if (wsConnected) {
+                log('Disconnected from Node.js WebSocket Host Bridge.', 'system');
+                wsConnected = false;
+                if (state.transport === 'bridge') {
+                    onDisconnected();
+                }
+            }
+            // Retry connecting after 3 seconds
+            setTimeout(initWebSocketBridge, 3000);
+        };
+
+        wsBridge.onerror = () => {
+            // Server might not be running; fall back silently to Web Bluetooth
+        };
+    } catch (e) {
+        // Fall back to Web Bluetooth
+    }
+}
+
+function updateBridgeUiState(deviceConnected, msgText) {
+    if (deviceConnected) {
+        state.connected = true;
+        state.transport = 'bridge';
+        setConnectionStatus('connected', `${state.deviceName || 'Nibble Keypad'} (Host Shared)`);
+        elements.batteryIndicator.classList.remove('hidden');
+        elements.batteryLevelText.textContent = `${state.battery || 100}%`;
+
+        if (elements.connectBanner) {
+            elements.connectBanner.classList.add('connected');
+            elements.bannerTitle.textContent = `${state.deviceName || 'Nibble Keypad'} Connected (Host Shared)`;
+            elements.bannerSubtitle.textContent = 'Active Bluetooth link shared with Windows. You can type on the keypad and configure it simultaneously!';
+            if (elements.bannerConnectBtn) elements.bannerConnectBtn.classList.add('hidden');
+        }
+        elements.btnConnect.classList.add('hidden');
+        if (elements.btnDisconnect) elements.btnDisconnect.classList.add('hidden');
+    } else {
+        state.connected = false;
+        state.transport = 'bridge';
+        setConnectionStatus('disconnected', 'Bridge Active (Keypad Asleep / Offline)');
+        elements.batteryIndicator.classList.add('hidden');
+
+        if (elements.connectBanner) {
+            elements.connectBanner.classList.remove('connected');
+            elements.bannerTitle.textContent = 'Node.js Host Bridge Active';
+            elements.bannerSubtitle.textContent = msgText || 'Connected to Node.js server via WebSocket. Press any key on your Nibble Keypad to wake it, or pair it in Windows Bluetooth settings.';
+            if (elements.bannerConnectBtn) {
+                elements.bannerConnectBtn.classList.remove('hidden');
+                elements.bannerConnectBtn.innerHTML = `
+                    <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="23 4 23 10 17 10"></polyline>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                    </svg>
+                    Check / Wake Keypad
+                `;
+            }
+        }
+        elements.btnConnect.classList.remove('hidden');
+        elements.btnConnect.innerHTML = `
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+            </svg>
+            Sync via Bridge
+        `;
+        if (elements.btnDisconnect) elements.btnDisconnect.classList.add('hidden');
+    }
+}
+
+function handleWsMessage(msg) {
+    if (msg.type === 'status') {
+        state.deviceName = msg.deviceName || 'Nibble Keypad';
+        state.battery = msg.battery || 100;
+        updateBridgeUiState(msg.connected, msg.message);
+        if (msg.connected) {
+            log(`Nibble Keypad active via Windows Host Bridge. Simultaneous typing & configuring enabled!`, 'success');
+        } else if (msg.message) {
+            log(msg.message, 'system');
+        }
+    } else if (msg.type === 'config') {
+        if (msg.power !== undefined && msg.power !== null) {
+            state.powerMode = msg.power;
+            elements.pwrNormal.checked = (state.powerMode === 0);
+            elements.pwrEnergy.checked = (state.powerMode === 1);
+        }
+
+        if (msg.keysHex && msg.keysHex.length >= 16) {
+            for (let i = 0; i < 4; ++i) {
+                const mod = parseInt(msg.keysHex.substr(i * 4, 2), 16);
+                const code = parseInt(msg.keysHex.substr(i * 4 + 2, 2), 16);
+                state.keys[i].modifiers = mod;
+                state.keys[i].keycode = code;
+            }
+            renderAllKeycaps();
+            loadSelectedKeyIntoEditor();
+            log(`Loaded key mappings from device: [${state.keys.map((k, idx) => `Key ${idx + 1}: ${getComboLabel(k.modifiers, k.keycode)}`).join(' | ')}]`, 'success');
+        }
+    } else if (msg.type === 'write_result') {
+        if (msg.success) {
+            log(`Saved ${msg.characteristic} successfully via Host Bridge.`, 'success');
+            showToast(`Saved ${msg.characteristic} to device!`, 'success');
+        } else {
+            log(`Error saving ${msg.characteristic}: ${msg.message || msg.status}`, 'error');
+            showToast(`Save error: ${msg.message || msg.status}`, 'error');
+        }
+    }
+}
+
+function onConnectButtonClicked() {
+    if (wsConnected) {
+        log('Querying Nibble Keypad status via Windows Host Bridge...', 'system');
+        showToast('Querying keypad via bridge... Press any key if sleeping.', 'info');
+        wsBridge.send(JSON.stringify({ action: 'get_config' }));
+    } else {
+        connectBleDevice();
+    }
 }
 
 function populateKeycodeSelect() {
@@ -284,11 +430,13 @@ function populateKeycodeSelect() {
 // Event Handlers
 // ============================================================================
 function bindEvents() {
-    elements.btnConnect.addEventListener('click', connectBleDevice);
+    elements.btnConnect.addEventListener('click', onConnectButtonClicked);
     if (elements.bannerConnectBtn) {
-        elements.bannerConnectBtn.addEventListener('click', connectBleDevice);
+        elements.bannerConnectBtn.addEventListener('click', onConnectButtonClicked);
     }
-    elements.btnDisconnect.addEventListener('click', disconnectBleDevice);
+    if (elements.btnDisconnect) {
+        elements.btnDisconnect.addEventListener('click', disconnectBleDevice);
+    }
 
     elements.keycaps.forEach((keycap, index) => {
         keycap.addEventListener('click', () => selectKey(index));
@@ -417,6 +565,12 @@ async function connectBleDevice() {
 }
 
 function disconnectBleDevice() {
+    if (state.transport === 'bridge') {
+        log('Nibble Keypad is connected via Windows Host Bridge. To completely unpair, use Windows Bluetooth settings.', 'system');
+        showToast('Keypad remains connected to Windows for typing.', 'info');
+        return;
+    }
+
     if (state.device && state.device.gatt.connected) {
         log('Disconnecting from keyboard...', 'system');
         state.device.gatt.disconnect();
@@ -439,7 +593,7 @@ function onDisconnected() {
         if (elements.bannerConnectBtn) elements.bannerConnectBtn.classList.remove('hidden');
     }
     elements.btnConnect.classList.remove('hidden');
-    elements.btnDisconnect.classList.add('hidden');
+    if (elements.btnDisconnect) elements.btnDisconnect.classList.add('hidden');
 
     log('BLE link disconnected.', 'system');
     showToast('Nibble Keypad disconnected.', 'system');
@@ -454,6 +608,12 @@ function setConnectionStatus(type, text) {
 // GATT Read & Write Logic
 // ============================================================================
 async function readAllSettingsFromDevice() {
+    if (wsConnected && state.transport === 'bridge') {
+        log('Requesting fresh configuration from device via Host Bridge...', 'ble-rx');
+        wsBridge.send(JSON.stringify({ action: 'get_config' }));
+        return;
+    }
+
     if (!state.connected || !state.characteristics.keyMap) {
         showToast('Not connected to device.', 'error');
         return;
@@ -491,6 +651,20 @@ async function readAllSettingsFromDevice() {
 }
 
 async function saveAllSettingsToDevice() {
+    if (wsConnected && state.transport === 'bridge') {
+        let keysHex = '';
+        for (let i = 0; i < 4; ++i) {
+            keysHex += state.keys[i].modifiers.toString(16).padStart(2, '0');
+            keysHex += state.keys[i].keycode.toString(16).padStart(2, '0');
+        }
+        log(`Saving key mappings via Host Bridge: [${keysHex}]...`, 'ble-tx');
+        wsBridge.send(JSON.stringify({ action: 'set_keys', keysHex }));
+        log(`Saving power profile (${state.powerMode}) via Host Bridge...`, 'ble-tx');
+        wsBridge.send(JSON.stringify({ action: 'set_power', value: state.powerMode }));
+        showToast('All settings sent to Nibble Keypad!', 'success');
+        return;
+    }
+
     if (!state.connected || !state.characteristics.keyMap) {
         showToast('Not connected to device.', 'error');
         return;
@@ -524,6 +698,16 @@ async function saveAllSettingsToDevice() {
 
 async function executeFactoryReset() {
     elements.modalReset.classList.add('hidden');
+
+    if (wsConnected && state.transport === 'bridge') {
+        log('Sending factory reset command via Host Bridge...', 'ble-tx');
+        wsBridge.send(JSON.stringify({ action: 'factory_reset' }));
+        showToast('Factory reset triggered! Device is resetting...', 'success');
+        applyPreset('default');
+        state.powerMode = 0;
+        elements.pwrNormal.checked = true;
+        return;
+    }
 
     if (!state.connected || !state.characteristics.reset) {
         showToast('Not connected to device.', 'error');

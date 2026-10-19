@@ -76,3 +76,11 @@ Desktop.ini
 *.workspace # General workspace files, can be from various tools
 *.suo       # Visual Studio Solution User Options
 *.sln.docstates # Visual Studio
+
+# Node.js
+node_modules/
+
+# .NET build outputs
+**/bin/
+**/obj/
+

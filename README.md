@@ -1,5 +1,9 @@
 # Nibble Keypad - ESP32-C3 BLE HID Keyboard Firmware
 
+<p align="center">
+  <img src="docs/Nibble.png" alt="Nibble Keypad Hardware" width="280" />
+</p>
+
 A lightweight, robust Bluetooth Low Energy (BLE) HID 4-key macropad firmware for the **ESP32-C3** (RISC-V) SoC using the **ESP-IDF v6.0** framework and the **Apache NimBLE** Bluetooth stack.
 
 ---
@@ -134,20 +138,27 @@ The keyboard includes a custom Bluetooth Low Energy GATT configuration service (
 
 ---
 
-## Web Bluetooth Configurator (`support/`)
+## Configurator App & Host WebSocket Bridge (`support/`)
 
-A browser-based client is included in the [`support/`](file:///c:/Projects/esp32/keyboard/firmware/support/index.html) directory. It connects directly to your Nibble Keypad over Web Bluetooth to:
+A browser-based client and Node.js bridge server are included in the [`support/`](file:///c:/Projects/esp32/keyboard/firmware/support/index.html) directory.
+
+### Host-Shared Mode (Simultaneous Typing & Configuration):
+When connected to Windows, Web Bluetooth cannot query the device directly because radio advertising stops once paired. The included Node.js server bridges Windows' native Bluetooth GATT connection to the web configurator over a local WebSocket, **allowing you to type on the keypad and configure it simultaneously**:
+
+```powershell
+cd support
+npm install   # First time only
+npm start     # Starts Node.js server + WinRT GATT WebSocket bridge on http://localhost:8080
+```
+Open `http://localhost:8080` in any browser. The configurator will immediately connect to your paired keypad without needing to unpair or disconnect.
+
+### Features:
 - Remap keys with live multi-modifier combos (Ctrl, Shift, Alt, GUI) or press "Capture Key" to record a keystroke from your physical keyboard.
+- Full Media Playback keys (Previous Track, Next Track, Play/Pause, Mute, Volume Up/Down).
 - Apply quick presets (*Developer Pad*, *Media Controller*, *Window Snapping*, *Factory ABCD*).
 - Switch and persist Power Profiles (*Normal Mode* vs *Energy Save Mode*).
 - Execute a one-click Factory Reset & Unpair.
-
-### How to Run:
-```powershell
-# Serve the support directory locally (Web Bluetooth requires localhost or https)
-python -m http.server 8080 --directory support
-```
-Then open `http://localhost:8080` in **Google Chrome**, **Microsoft Edge**, or **Opera**, and click **Connect Nibble Keypad**.
+- **Dual-mode connection**: Supports Node.js Host WebSocket bridge (desktop shared connection) and direct Web Bluetooth (standalone / mobile / tablet fallback).
 
 ---
 

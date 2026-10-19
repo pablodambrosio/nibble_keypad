@@ -1,6 +1,10 @@
 # Hardware Specification & Electrical Design
 
-This document details the hardware characteristics, pin allocations, power domain architecture, and electrical considerations for the **Nimble 4** keyboard.
+<p align="center">
+  <img src="Nibble.png" alt="Nibble Keypad Hardware" width="280" />
+</p>
+
+This document details the hardware characteristics, pin allocations, power domain architecture, and electrical considerations for the **Nibble Keypad** macropad.
 
 ---
 

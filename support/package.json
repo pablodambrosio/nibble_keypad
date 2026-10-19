@@ -1,0 +1,12 @@
+{
+  "name": "nibble-keypad-support",
+  "version": "1.0.0",
+  "description": "Host-shared BLE Configurator & WebSocket bridge for Nibble Keypad",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
