@@ -47,12 +47,15 @@ static const char *TAG = "keyboard";
 
 /**
  * @note ESP32-C3 Hardware Notice:
- * GPIO 9 is the chip's BOOT strapping pin. If Key 3 is held down while powering on
+ * Keypad Physical Layout (2x2 Grid):
+ *   [ Key 1: GPIO 8  ]  [ Key 2: GPIO 10 ]
+ *   [ Key 3: GPIO 20 ]  [ Key 4: GPIO 9  ]
+ *
+ * GPIO 9 (Key 4) is the chip's BOOT strapping pin. If Key 4 is held down while powering on
  * or resetting, the ESP32-C3 enters UART bootloader / download mode instead of booting SPI flash.
- * GPIO 8 also controls ROM boot log output.
- * If redesigning hardware, prefer non-strapping pins (e.g. GPIO 0..7, 21).
+ * GPIO 8 (Key 1) also controls ROM boot log output.
  */
-static const gpio_num_t key_pins[NUM_KEYS] = { GPIO_NUM_10, GPIO_NUM_8, GPIO_NUM_9, GPIO_NUM_20 };
+static const gpio_num_t key_pins[NUM_KEYS] = { GPIO_NUM_8, GPIO_NUM_10, GPIO_NUM_20, GPIO_NUM_9 };
 static const char *key_names[NUM_KEYS] = { "Key1", "Key2", "Key3", "Key4" };
 
 // ============================================================================
@@ -1041,12 +1044,12 @@ void app_main(void)
         ESP_ERROR_CHECK(gpio_config(&io_conf));
     }
 
-    // Hardware failsafe: hold Key 1 (GPIO 10) + Key 4 (GPIO 20) during boot for 2s to factory reset
-    if (gpio_get_level(key_pins[0]) == 0 && gpio_get_level(key_pins[3]) == 0) {
-        ESP_LOGW(TAG, "Key 1 + Key 4 held at boot -> checking for factory reset combo (hold 2s)...");
+    // Hardware failsafe: hold Key 1 (GPIO 8) + Key 3 (GPIO 20) during boot for 2s to factory reset
+    if (gpio_get_level(key_pins[0]) == 0 && gpio_get_level(key_pins[2]) == 0) {
+        ESP_LOGW(TAG, "Key 1 + Key 3 held at boot -> checking for factory reset combo (hold 2s)...");
         vTaskDelay(pdMS_TO_TICKS(2000));
-        if (gpio_get_level(key_pins[0]) == 0 && gpio_get_level(key_pins[3]) == 0) {
-            ESP_LOGW(TAG, "Hardware factory reset triggered via Key 1 + Key 4 hold!");
+        if (gpio_get_level(key_pins[0]) == 0 && gpio_get_level(key_pins[2]) == 0) {
+            ESP_LOGW(TAG, "Hardware factory reset triggered via Key 1 + Key 3 hold!");
             nvs_flash_init();
             nvs_handle_t nvs_h;
             if (nvs_open(NVS_NAMESPACE_CFG, NVS_READWRITE, &nvs_h) == ESP_OK) {

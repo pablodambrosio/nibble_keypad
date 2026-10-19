@@ -21,17 +21,17 @@ A lightweight, robust Bluetooth Low Energy (BLE) HID 4-key macropad firmware for
 
 The firmware default pin configuration targets typical ESP32-C3 development boards (such as the Seeed Studio XIAO ESP32-C3):
 
-| Key | GPIO Pin | Circuit Logic | Default Key Code | Output |
-|---|---|---|---|---|
-| **Key 1** | `GPIO 10` | Internal Pull-Up, Active-LOW | `0x04` | Key `a` |
-| **Key 2** | `GPIO 8` | Internal Pull-Up, Active-LOW | `0x05` | Key `b` |
-| **Key 3** | `GPIO 9` | Internal Pull-Up, Active-LOW | `0x06` | Key `c` |
-| **Key 4** | `GPIO 20` | Internal Pull-Up, Active-LOW | `0x07` | Key `d` |
+| Key | Position | GPIO Pin | Circuit Logic | Default Key Code | Output |
+|---|---|---|---|---|---|
+| **Key 1** | Top-Left | `GPIO 8` | Internal Pull-Up, Active-LOW | `0x04` | Key `a` |
+| **Key 2** | Top-Right | `GPIO 10` | Internal Pull-Up, Active-LOW | `0x05` | Key `b` |
+| **Key 3** | Bottom-Left | `GPIO 20` | Internal Pull-Up, Active-LOW | `0x06` | Key `c` |
+| **Key 4** | Bottom-Right | `GPIO 9` | Internal Pull-Up, Active-LOW | `0x07` | Key `d` |
 
 > [!WARNING]
 > **ESP32-C3 Strapping Pin Caution**:
-> - `GPIO 9` is the ESP32-C3 **BOOT strapping pin**. If Key 3 is held down while the board is powering on or being reset, the chip enters **ROM bootloader (download mode)** instead of booting firmware.
-> - `GPIO 8` is also a boot strapping pin controlling boot log output.
+> - `GPIO 9` (Key 4) is the ESP32-C3 **BOOT strapping pin**. If Key 4 is held down while the board is powering on or being reset, the chip enters **ROM bootloader (download mode)** instead of booting firmware.
+> - `GPIO 8` (Key 1) is also a boot strapping pin controlling boot log output.
 > - If designing a dedicated custom PCB, it is strongly recommended to use **GPIO 0, 1, 2, 3** instead.
 
 ---
@@ -97,7 +97,7 @@ The keyboard includes a custom Bluetooth Low Energy GATT configuration service (
 
 ### Factory Reset Options:
 1. **Wireless via GATT (`0xFFF3`)**: Write `0x01` to Characteristic `0xFFF3`. The keyboard will acknowledge the write, restore default keys ('a', 'b', 'c', 'd') and normal power mode, erase the `"kb_cfg"` NVS namespace, wipe all paired host bonding keys via `ble_store_clear()`, cleanly disconnect the host, and restart in 200 ms as a brand new discoverable device.
-2. **Hardware Boot Failsafe**: Hold **Key 1 (GPIO 10)** and **Key 4 (GPIO 20)** simultaneously during power-on or hardware reset for **2 seconds** to perform an offline factory reset.
+2. **Hardware Boot Failsafe**: Hold **Key 1 (GPIO 8)** and **Key 3 (GPIO 20)** simultaneously during power-on or hardware reset for **2 seconds** to perform an offline factory reset.
 
 ---
 

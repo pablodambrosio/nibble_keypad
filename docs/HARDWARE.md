@@ -12,16 +12,22 @@ The 4 mechanical keys are connected directly between the ESP32-C3 GPIO pins and 
        ESP32-C3
   +------------------+
   |                  |
-  |          GPIO 10 +-------[ Key 1 ]-------+
-  |                  |                       |
-  |          GPIO  8 +-------[ Key 2 ]-------+
-  |                  |                       |
-  |          GPIO  9 +-------[ Key 3 ]-------+
-  |                  |                       |
-  |          GPIO 20 +-------[ Key 4 ]-------+
-  |                  |                       |
-  |              GND +-----------------------+
+  |          GPIO  8 +-------[ Key 1 (Top-Left)  ]-------+
+  |                  |                                   |
+  |          GPIO 10 +-------[ Key 2 (Top-Right) ]-------+
+  |                  |                                   |
+  |          GPIO 20 +-------[ Key 3 (Bot-Left)  ]-------+
+  |                  |                                   |
+  |          GPIO  9 +-------[ Key 4 (Bot-Right) ]-------+
+  |                  |                                   |
+  |              GND +-----------------------------------+
   +------------------+
+```
+
+### Physical Layout Matrix (2x2):
+```
+  [ Key 1: GPIO 8  ]   [ Key 2: GPIO 10 ]
+  [ Key 3: GPIO 20 ]   [ Key 4: GPIO 9  ]
 ```
 
 ### Pin Characteristics:
@@ -38,10 +44,10 @@ The ESP32-C3 uses specific pins during chip reset to determine the boot mode:
 
 | GPIO Pin | Function in Firmware | ESP32-C3 Strapping Function | Hardware Risk & Notes |
 |---|---|---|---|
-| **`GPIO 9`** | Key 3 | **BOOT Pin** (High = Flash boot, Low = Download mode) | **High Risk**: If Key 3 is held down while plugging in USB or powering on the board, the ESP32-C3 enters the ROM serial bootloader instead of running firmware. |
-| **`GPIO 8`** | Key 2 | Boot Log & Strapping | Low Risk: Controls ROM boot message printing. |
-| **`GPIO 10`** | Key 1 | General GPIO | Safe. |
-| **`GPIO 20`** | Key 4 | General GPIO / USB-Serial-JTAG | Safe. |
+| **`GPIO 9`** | Key 4 (Bottom-Right) | **BOOT Pin** (High = Flash boot, Low = Download mode) | **High Risk**: If Key 4 is held down while plugging in USB or powering on the board, the ESP32-C3 enters the ROM serial bootloader instead of running firmware. |
+| **`GPIO 8`** | Key 1 (Top-Left) | Boot Log & Strapping | Low Risk: Controls ROM boot message printing. |
+| **`GPIO 10`** | Key 2 (Top-Right) | General GPIO | Safe. |
+| **`GPIO 20`** | Key 3 (Bottom-Left) | General GPIO / USB-Serial-JTAG | Safe. |
 
 ---
 

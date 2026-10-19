@@ -205,6 +205,6 @@ Writing `0x01` to Characteristic `0xFFF3` triggers an asynchronous FreeRTOS sequ
 
 ### Mechanism 2: Hardware Boot Combo Failsafe
 If the device is unable to connect to a host (e.g. host OS Bluetooth stack corruption):
-- Hold **Key 1 (GPIO 10)** + **Key 4 (GPIO 20)** simultaneously during power-on / reset for **2 seconds**.
-- The firmware logs `"Hardware factory reset triggered via Key 1 + Key 4 hold!"`, wipes `"kb_cfg"` NVS, clears the NimBLE bonding store, and reboots.
+- Hold **Key 1 (GPIO 8)** + **Key 3 (GPIO 20)** simultaneously during power-on / reset for **2 seconds**.
+- The firmware logs `"Hardware factory reset triggered via Key 1 + Key 3 hold!"`, wipes `"kb_cfg"` NVS, clears the NimBLE bonding store, and reboots.
 
