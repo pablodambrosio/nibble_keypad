@@ -1,4 +1,4 @@
-# Nimble 4 - ESP32-C3 BLE HID Keyboard Firmware
+# Nibble Keypad - ESP32-C3 BLE HID Keyboard Firmware
 
 A lightweight, robust Bluetooth Low Energy (BLE) HID 4-key macropad firmware for the **ESP32-C3** (RISC-V) SoC using the **ESP-IDF v6.0** framework and the **Apache NimBLE** Bluetooth stack.
 
@@ -85,6 +85,22 @@ esp_err_t power_manager_set_profile(power_profile_mode_t mode);
 
 ---
 
+## Wireless Configuration Service & Factory Reset
+
+The keyboard includes a custom Bluetooth Low Energy GATT configuration service (`0xFFF0`) that allows wireless reconfiguration via mobile apps (e.g., nRF Connect, LightBlue) or Web Bluetooth web pages without reflashing:
+
+| Characteristic | UUID | Permissions | Length | Values / Description |
+|---|---|---|---|---|
+| **Power Profile** | `0xFFF1` | Read / Write | 1 byte | `0x00`: Normal (30s idle / 10m sleep)<br/>`0x01`: Energy Save (10s idle / 5m sleep) |
+| **Key Mappings** | `0xFFF2` | Read / Write | 8 bytes | 4 keys × 2 bytes `[mod0, key0, mod1, key1, mod2, key2, mod3, key3]` |
+| **Factory Reset** | `0xFFF3` | Read / Write | 1 byte | Write `0x01` to erase NVS, clear bonding table, disconnect, and reboot |
+
+### Factory Reset Options:
+1. **Wireless via GATT (`0xFFF3`)**: Write `0x01` to Characteristic `0xFFF3`. The keyboard will acknowledge the write, restore default keys ('a', 'b', 'c', 'd') and normal power mode, erase the `"kb_cfg"` NVS namespace, wipe all paired host bonding keys via `ble_store_clear()`, cleanly disconnect the host, and restart in 200 ms as a brand new discoverable device.
+2. **Hardware Boot Failsafe**: Hold **Key 1 (GPIO 10)** and **Key 4 (GPIO 20)** simultaneously during power-on or hardware reset for **2 seconds** to perform an offline factory reset.
+
+---
+
 ## Getting Started
 
 ### Prerequisites
@@ -113,8 +129,25 @@ esp_err_t power_manager_set_profile(power_profile_mode_t mode);
 
 4. **Pairing**:
    - On your host computer, phone, or tablet, open **Bluetooth Settings**.
-   - Search for **"Nimble 4"** and select **Pair**.
+   - Search for **"Nibble Keypad"** and select **Pair**.
    - No passkey or PIN is required. The device will connect and register as an input keyboard.
+
+---
+
+## Web Bluetooth Configurator (`support/`)
+
+A browser-based client is included in the [`support/`](file:///c:/Projects/esp32/keyboard/firmware/support/index.html) directory. It connects directly to your Nibble Keypad over Web Bluetooth to:
+- Remap keys with live multi-modifier combos (Ctrl, Shift, Alt, GUI) or press "Capture Key" to record a keystroke from your physical keyboard.
+- Apply quick presets (*Developer Pad*, *Media Controller*, *Window Snapping*, *Factory ABCD*).
+- Switch and persist Power Profiles (*Normal Mode* vs *Energy Save Mode*).
+- Execute a one-click Factory Reset & Unpair.
+
+### How to Run:
+```powershell
+# Serve the support directory locally (Web Bluetooth requires localhost or https)
+python -m http.server 8080 --directory support
+```
+Then open `http://localhost:8080` in **Google Chrome**, **Microsoft Edge**, or **Opera**, and click **Connect Nibble Keypad**.
 
 ---
 
@@ -125,7 +158,11 @@ esp_err_t power_manager_set_profile(power_profile_mode_t mode);
 ├── main/
 │   ├── CMakeLists.txt     # Component registration and dependencies
 │   ├── Kconfig.projbuild  # Component configuration menu
-│   └── main.c            # Firmware implementation (BLE HID, key scanner, power manager)
+│   └── main.c            # Firmware implementation (BLE HID, key scanner, power manager, GATT cfg)
+├── support/               # Web Bluetooth HTML/CSS/JS macropad configurator
+│   ├── index.html         # Web application markup
+│   ├── style.css          # Design system, glassmorphism, 3D mechanical keycaps
+│   └── app.js             # Web Bluetooth GATT client logic & keycode tables
 ├── docs/
 │   ├── ARCHITECTURE.md    # Detailed software design & sequence diagrams
 │   └── HARDWARE.md        # Electrical schematics, pin considerations & deep sleep notes

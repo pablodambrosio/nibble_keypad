@@ -1,6 +1,6 @@
 # Software Architecture & System Design
 
-This document details the software architecture, state machines, task models, and protocol implementations of the **Nimble 4** firmware.
+This document details the software architecture, state machines, task models, and protocol implementations of the **Nibble Keypad** firmware.
 
 ---
 
@@ -173,13 +173,38 @@ typedef struct {
 
 ---
 
-## 6. Future Extension: Custom Configuration GATT Service
+---
 
-The firmware is designed to be easily extensible for wireless remapping from a mobile app or Web Bluetooth web page:
+## 6. Custom Configuration GATT Service (UUID `0xFFF0`)
 
-### Proposed GATT Profile:
-- **Service UUID**: `0000FFF0-0000-1000-8000-00805F9B34FB` (Custom Configuration Service)
-- **Characteristics**:
-  - `0xFFF1` (Read/Write, 1 byte): **Power Profile Selection** (`0x00` = Normal, `0x01` = Energy Save).
-  - `0xFFF2` (Read/Write, 8 bytes): **Key Remapping Table** (4 keys × 2 bytes: `[mod0, key0, mod1, key1, mod2, key2, mod3, key3]`).
-  - `0xFFF3` (Read, 1 byte): **Battery Level** (Standard Battery Service UUID `0x180F`).
+The keyboard exposes a dedicated GATT service allowing wireless remapping, power profile adjustment, and complete factory reset without reflashing firmware. This service is also broadcast in the BLE Scan Response packet for instant discovery by mobile apps (e.g. nRF Connect, LightBlue) and Web Bluetooth applications.
+
+### GATT Service Architecture:
+- **Service UUID**: `0xFFF0` (Custom Keyboard Configuration Service)
+
+| Characteristic | UUID | Permissions | Length | Format / Description | User Description (`0x2901`) |
+|---|---|---|---|---|---|
+| **Power Profile** | `0xFFF1` | Read / Write | 1 byte | `0x00`: NORMAL (30s idle / 10m sleep)<br/>`0x01`: ENERGY_SAVE (10s idle / 5m sleep) | `"Power Profile (0=Normal, 1=EnergySave)"` |
+| **Key Remapping** | `0xFFF2` | Read / Write | 8 bytes | 4 keys × 2 bytes `[mod0, key0, mod1, key1, mod2, key2, mod3, key3]`<br/>`mod`: Bitmask of `KEY_MOD_*`<br/>`key`: Standard USB HID keycode | `"Key Mappings (4x 2-byte [mod, keycode])"` |
+| **Factory Reset** | `0xFFF3` | Read / Write | 1 byte | Write non-zero (e.g. `0x01`) to trigger asynchronous factory reset sequence | `"Factory Reset (Write 1 to clear NVS and forget device)"` |
+
+---
+
+## 7. Factory Reset & Device Unpairing
+
+The firmware provides two redundant mechanisms to restore the keyboard to its factory default state and forget bonded hosts:
+
+### Mechanism 1: Wireless GATT Command (`0xFFF3`)
+Writing `0x01` to Characteristic `0xFFF3` triggers an asynchronous FreeRTOS sequence:
+1. **Response Transmission (300 ms)**: Allows NimBLE to acknowledge the ATT Write Response (`0x00` OK) back to the client application.
+2. **In-Memory Restore**: Reverts key mappings to `'a'`, `'b'`, `'c'`, `'d'` and power mode to `NORMAL`.
+3. **NVS Configuration Erasure**: Erases the `"kb_cfg"` namespace (`nvs_erase_all`).
+4. **NimBLE Security Database Purge**: Calls `ble_store_clear()` to delete all LTKs, IRKs, bonding keys, and CCCD subscription records.
+5. **Connection Termination**: Cleanly terminates the active BLE link (`ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM)`).
+6. **Clean Reboot (200 ms)**: Restarts the ESP32-C3 via `esp_restart()`, booting up as a fresh, discoverable, unpaired device.
+
+### Mechanism 2: Hardware Boot Combo Failsafe
+If the device is unable to connect to a host (e.g. host OS Bluetooth stack corruption):
+- Hold **Key 1 (GPIO 10)** + **Key 4 (GPIO 20)** simultaneously during power-on / reset for **2 seconds**.
+- The firmware logs `"Hardware factory reset triggered via Key 1 + Key 4 hold!"`, wipes `"kb_cfg"` NVS, clears the NimBLE bonding store, and reboots.
+

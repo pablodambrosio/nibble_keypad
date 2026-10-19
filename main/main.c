@@ -1,6 +1,6 @@
 /**
  * @file main.c
- * @brief Nimble 4 - ESP32-C3 4-Key BLE HID Keyboard Firmware
+ * @brief Nibble Keypad - ESP32-C3 4-Key BLE HID Keyboard Firmware
  *
  * Implements a Bluetooth Low Energy (BLE) Human Interface Device (HID) keyboard
  * using Apache NimBLE and ESP-IDF. Includes atomic 4-key debouncing, standard 8-byte
@@ -31,6 +31,10 @@
 #include "services/bas/ble_svc_bas.h"
 #include "esp_sleep.h"
 #include "esp_timer.h"
+#include "esp_system.h"
+#include "host/ble_gatt.h"
+#include "host/ble_store.h"
+#include "host/ble_hs_mbuf.h"
 
 static const char *TAG = "keyboard";
 
@@ -141,6 +145,30 @@ esp_err_t keyboard_set_key_mapping(size_t index, uint8_t modifiers, uint8_t keyc
 }
 
 /**
+ * @brief Bulk update and persist all key mappings in NVS flash.
+ *
+ * @param mappings Array of NUM_KEYS key mappings.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if mappings pointer is NULL.
+ */
+esp_err_t keyboard_set_all_key_mappings(const key_mapping_t mappings[NUM_KEYS])
+{
+    if (mappings == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memcpy(s_key_mappings, mappings, sizeof(s_key_mappings));
+
+    nvs_handle_t nvs_h;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_CFG, NVS_READWRITE, &nvs_h);
+    if (err == ESP_OK) {
+        nvs_set_blob(nvs_h, NVS_KEY_KEY_MAP, s_key_mappings, sizeof(s_key_mappings));
+        nvs_commit(nvs_h);
+        nvs_close(nvs_h);
+    }
+    ESP_LOGI(TAG, "All 4 key mappings bulk updated via configuration");
+    return ESP_OK;
+}
+
+/**
  * @brief Load persistent key mappings from NVS flash, or save defaults on first boot.
  */
 static void load_key_mappings(void)
@@ -185,7 +213,7 @@ static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static uint8_t s_key_report[HID_KEYBOARD_REPORT_LEN];
 
 // BLE Device Identity
-static const char *DEVICE_NAME = "Nimble 4";
+static const char *DEVICE_NAME = "Nibble Keypad";
 
 // Forward declaration from NimBLE store config
 void ble_store_config_init(void);
@@ -310,6 +338,257 @@ static void update_connection_power_mode(bool idle)
 }
 
 // ============================================================================
+// Factory Reset & Device Unpairing Logic
+// ============================================================================
+
+/**
+ * @brief Asynchronous FreeRTOS task to execute factory reset.
+ *
+ * 1. Delays 300 ms so that any in-flight GATT write response is delivered to the host.
+ * 2. Restores in-memory key mappings ('a', 'b', 'c', 'd') and power profile (NORMAL).
+ * 3. Erases the "kb_cfg" NVS namespace (persistent keys & power profile).
+ * 4. Clears all bonded peer encryption keys & CCCDs from NimBLE store.
+ * 5. Cleanly terminates the active BLE connection (if connected).
+ * 6. Delays 200 ms to transmit the disconnect packet, then reboots the ESP32-C3 via esp_restart().
+ */
+static void factory_reset_task(void *arg)
+{
+    ESP_LOGW(TAG, "Factory reset sequence initiated: waiting 300ms for GATT response transmission...");
+    vTaskDelay(pdMS_TO_TICKS(300));
+
+    // 1. Restore defaults in memory
+    memcpy(s_key_mappings, s_default_key_mappings, sizeof(s_key_mappings));
+    s_power_mode = POWER_PROFILE_NORMAL;
+
+    // 2. Erase keyboard configuration from NVS
+    nvs_handle_t nvs_h;
+    if (nvs_open(NVS_NAMESPACE_CFG, NVS_READWRITE, &nvs_h) == ESP_OK) {
+        nvs_erase_all(nvs_h);
+        nvs_commit(nvs_h);
+        nvs_close(nvs_h);
+        ESP_LOGI(TAG, "Erased NVS namespace '%s'", NVS_NAMESPACE_CFG);
+    }
+
+    // 3. Clear all bonded security records & pairing keys from NimBLE (forgets paired device)
+    int rc = ble_store_clear();
+    ESP_LOGI(TAG, "NimBLE security store cleared (rc=%d)", rc);
+
+    // 4. Terminate BLE connection if active
+    if (s_ble_connected && s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+        ESP_LOGI(TAG, "Disconnecting peer on conn_handle=%u", s_conn_handle);
+        ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    }
+
+    // 5. Brief delay to allow BLE disconnection packet to be transmitted, then reboot
+    vTaskDelay(pdMS_TO_TICKS(200));
+    ESP_LOGW(TAG, "Restarting ESP32-C3 in clean factory state...");
+    esp_restart();
+}
+
+/**
+ * @brief Trigger a full factory reset asynchronously.
+ *
+ * @return ESP_OK on success, ESP_FAIL if task creation failed.
+ */
+esp_err_t trigger_factory_reset(void)
+{
+    BaseType_t ret = xTaskCreate(factory_reset_task, "fact_rst_task", 2560, NULL, 5, NULL);
+    return (ret == pdPASS) ? ESP_OK : ESP_FAIL;
+}
+
+// ============================================================================
+// Custom GATT Configuration Service (UUID 0xFFF0)
+// ============================================================================
+#define CFG_SVC_UUID               0xFFF0
+#define CFG_CHR_PWR_MODE_UUID      0xFFF1
+#define CFG_CHR_KEY_MAP_UUID       0xFFF2
+#define CFG_CHR_FACTORY_RESET_UUID 0xFFF3
+
+static const ble_uuid16_t s_cfg_svc_uuid = BLE_UUID16_INIT(CFG_SVC_UUID);
+static const ble_uuid16_t s_cfg_chr_pwr_uuid = BLE_UUID16_INIT(CFG_CHR_PWR_MODE_UUID);
+static const ble_uuid16_t s_cfg_chr_key_map_uuid = BLE_UUID16_INIT(CFG_CHR_KEY_MAP_UUID);
+static const ble_uuid16_t s_cfg_chr_reset_uuid = BLE_UUID16_INIT(CFG_CHR_FACTORY_RESET_UUID);
+
+static uint16_t s_cfg_chr_pwr_handle;
+static uint16_t s_cfg_chr_key_map_handle;
+static uint16_t s_cfg_chr_reset_handle;
+
+static const ble_uuid16_t s_user_desc_uuid = BLE_UUID16_INIT(0x2901);
+static const char s_desc_pwr[] = "Power Profile (0=Normal, 1=EnergySave)";
+static const char s_desc_keys[] = "Key Mappings (4x 2-byte [mod, keycode])";
+static const char s_desc_reset[] = "Factory Reset (Write 1 to clear NVS and forget device)";
+
+/**
+ * @brief GATT access callback for the custom configuration service.
+ */
+static int cfg_gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
+                             struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    // Handle descriptor read (Characteristic User Description 0x2901)
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_DSC) {
+        if (ctxt->dsc != NULL && ctxt->dsc->arg != NULL) {
+            const char *desc = (const char *)ctxt->dsc->arg;
+            int rc = os_mbuf_append(ctxt->om, desc, strlen(desc));
+            return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+        }
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    const ble_uuid_t *uuid = ctxt->chr->uuid;
+
+    // --- Characteristic 1: Power Profile (0xFFF1) ---
+    if (ble_uuid_cmp(uuid, &s_cfg_chr_pwr_uuid.u) == 0) {
+        if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+            uint8_t mode = (uint8_t)s_power_mode;
+            int rc = os_mbuf_append(ctxt->om, &mode, sizeof(mode));
+            return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+        } else if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+            uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+            if (len != 1) {
+                return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            }
+            uint8_t new_mode = 0;
+            int rc = ble_hs_mbuf_to_flat(ctxt->om, &new_mode, sizeof(new_mode), NULL);
+            if (rc != 0) {
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            if (new_mode > POWER_PROFILE_ENERGY_SAVE) {
+                return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            }
+            power_manager_set_profile((power_profile_mode_t)new_mode);
+            return 0;
+        }
+    }
+
+    // --- Characteristic 2: Key Mapping Table (0xFFF2) ---
+    if (ble_uuid_cmp(uuid, &s_cfg_chr_key_map_uuid.u) == 0) {
+        if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+            int rc = os_mbuf_append(ctxt->om, s_key_mappings, sizeof(s_key_mappings));
+            return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+        } else if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+            uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+            if (len != sizeof(s_key_mappings)) {
+                return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            }
+            key_mapping_t new_map[NUM_KEYS];
+            int rc = ble_hs_mbuf_to_flat(ctxt->om, new_map, sizeof(new_map), NULL);
+            if (rc != 0) {
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            keyboard_set_all_key_mappings(new_map);
+            return 0;
+        }
+    }
+
+    // --- Characteristic 3: Factory Reset / Forget Device (0xFFF3) ---
+    if (ble_uuid_cmp(uuid, &s_cfg_chr_reset_uuid.u) == 0) {
+        if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+            uint8_t zero = 0;
+            int rc = os_mbuf_append(ctxt->om, &zero, sizeof(zero));
+            return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+        } else if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+            uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+            if (len < 1) {
+                return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+            }
+            uint8_t cmd = 0;
+            int rc = ble_hs_mbuf_to_flat(ctxt->om, &cmd, 1, NULL);
+            if (rc != 0) {
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            if (cmd != 0) {
+                ESP_LOGW(TAG, "GATT write: Factory reset triggered (cmd=0x%02X)", cmd);
+                trigger_factory_reset();
+            }
+            return 0;
+        }
+    }
+
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
+static const struct ble_gatt_svc_def s_cfg_svcs[] = {
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &s_cfg_svc_uuid.u,
+        .characteristics = (struct ble_gatt_chr_def[])
+        {
+            {
+                // Characteristic 1: Power Profile (0xFFF1)
+                .uuid = &s_cfg_chr_pwr_uuid.u,
+                .access_cb = cfg_gatt_access_cb,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+                .val_handle = &s_cfg_chr_pwr_handle,
+                .descriptors = (struct ble_gatt_dsc_def[])
+                {
+                    {
+                        .uuid = &s_user_desc_uuid.u,
+                        .att_flags = BLE_ATT_F_READ,
+                        .access_cb = cfg_gatt_access_cb,
+                        .arg = (void *)s_desc_pwr,
+                    },
+                    { 0 }
+                },
+            },
+            {
+                // Characteristic 2: Key Mapping Table (0xFFF2)
+                .uuid = &s_cfg_chr_key_map_uuid.u,
+                .access_cb = cfg_gatt_access_cb,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+                .val_handle = &s_cfg_chr_key_map_handle,
+                .descriptors = (struct ble_gatt_dsc_def[])
+                {
+                    {
+                        .uuid = &s_user_desc_uuid.u,
+                        .att_flags = BLE_ATT_F_READ,
+                        .access_cb = cfg_gatt_access_cb,
+                        .arg = (void *)s_desc_keys,
+                    },
+                    { 0 }
+                },
+            },
+            {
+                // Characteristic 3: Factory Reset / Forget Device (0xFFF3)
+                .uuid = &s_cfg_chr_reset_uuid.u,
+                .access_cb = cfg_gatt_access_cb,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+                .val_handle = &s_cfg_chr_reset_handle,
+                .descriptors = (struct ble_gatt_dsc_def[])
+                {
+                    {
+                        .uuid = &s_user_desc_uuid.u,
+                        .att_flags = BLE_ATT_F_READ,
+                        .access_cb = cfg_gatt_access_cb,
+                        .arg = (void *)s_desc_reset,
+                    },
+                    { 0 }
+                },
+            },
+            { 0 } // End of characteristics
+        },
+    },
+    { 0 } // End of services
+};
+
+/**
+ * @brief Register the custom configuration GATT service with NimBLE.
+ */
+static void init_custom_cfg_service(void)
+{
+    int rc = ble_gatts_count_cfg(s_cfg_svcs);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gatts_count_cfg failed: %d", rc);
+        return;
+    }
+    rc = ble_gatts_add_svcs(s_cfg_svcs);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gatts_add_svcs failed: %d", rc);
+        return;
+    }
+    ESP_LOGI(TAG, "Custom Configuration GATT Service (0x%04X) registered successfully", CFG_SVC_UUID);
+}
+
+// ============================================================================
 // HID Report Map & Configuration
 // ============================================================================
 
@@ -366,7 +645,7 @@ static esp_hid_device_config_t hid_config = {
     .vendor_id = 0x16C0,
     .product_id = 0x05DF,
     .version = 0x0100,
-    .device_name = "Nimble 4",
+    .device_name = "Nibble Keypad",
     .manufacturer_name = "Keyboard",
     .serial_number = "0001",
     .report_maps = report_maps,
@@ -406,6 +685,15 @@ static void ble_start_advertising(void)
         ESP_LOGE(TAG, "ble_gap_adv_set_fields failed: %d", rc);
         return;
     }
+
+    // Include custom configuration service UUID in scan response for easy discovery
+    static ble_uuid16_t cfg_service_uuid = BLE_UUID16_INIT(CFG_SVC_UUID);
+    struct ble_hs_adv_fields rsp_fields;
+    memset(&rsp_fields, 0, sizeof(rsp_fields));
+    rsp_fields.uuids16 = &cfg_service_uuid;
+    rsp_fields.num_uuids16 = 1;
+    rsp_fields.uuids16_is_complete = 1;
+    ble_gap_adv_rsp_set_fields(&rsp_fields);
 
     uint8_t own_addr_type;
     rc = ble_hs_id_infer_auto(0, &own_addr_type);
@@ -726,10 +1014,13 @@ static void init_ble_hid(void)
     // Initialize battery level to 100% in GATT database (no physical battery monitor)
     ble_svc_bas_battery_level_set(100);
 
+    // Register custom configuration GATT service (UUID 0xFFF0)
+    init_custom_cfg_service();
+
     // Start the NimBLE host task
     host_task_start();
 
-    ESP_LOGI(TAG, "BLE HID initialized, waiting for sync");
+    ESP_LOGI(TAG, "BLE HID + Config Service initialized, waiting for sync");
 }
 
 /**
@@ -748,6 +1039,24 @@ void app_main(void)
     for (int i = 0; i < NUM_KEYS; ++i) {
         io_conf.pin_bit_mask = (1ULL << key_pins[i]);
         ESP_ERROR_CHECK(gpio_config(&io_conf));
+    }
+
+    // Hardware failsafe: hold Key 1 (GPIO 10) + Key 4 (GPIO 20) during boot for 2s to factory reset
+    if (gpio_get_level(key_pins[0]) == 0 && gpio_get_level(key_pins[3]) == 0) {
+        ESP_LOGW(TAG, "Key 1 + Key 4 held at boot -> checking for factory reset combo (hold 2s)...");
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        if (gpio_get_level(key_pins[0]) == 0 && gpio_get_level(key_pins[3]) == 0) {
+            ESP_LOGW(TAG, "Hardware factory reset triggered via Key 1 + Key 4 hold!");
+            nvs_flash_init();
+            nvs_handle_t nvs_h;
+            if (nvs_open(NVS_NAMESPACE_CFG, NVS_READWRITE, &nvs_h) == ESP_OK) {
+                nvs_erase_all(nvs_h);
+                nvs_commit(nvs_h);
+                nvs_close(nvs_h);
+            }
+            ble_store_clear();
+            esp_restart();
+        }
     }
 
     init_ble_hid();
